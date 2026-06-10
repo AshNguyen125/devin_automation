@@ -1,0 +1,37 @@
+target_repo:
+  owner: AshNguyen125
+  name: superset_fork
+  branch: d3-localization
+  github_url: https://github.com/AshNguyen125/superset_fork
+
+devin:
+  org_id: org-d0f9923180b94f74931a4ac1006c0a25
+  api_base: https://api.devin.ai/v3
+
+scanner:
+  # Directories to scan for TODO markers (relative to repo root)
+  scan_dirs:
+    - superset/
+    - superset-frontend/src/
+  # Markers to grep for
+  markers:
+    - TODO
+    - FIXME
+    - HACK
+    - XXX
+  # Lines of context around each marker to extract
+  context_lines: 5
+  # Max TODOs to send to the Devin session for ranking
+  max_todos: 100
+
+resolver:
+  # Wall-clock time budget in minutes for the resolver session
+  time_budget_minutes: 30
+  # Minutes before deadline to send "wrap up" message
+  wrap_up_buffer_minutes: 5
+  # Max TODO items to attempt per run (safety cap)
+  max_items: 10
+
+reports:
+  # Directory for reports (relative to this repo root)
+  output_dir: reports/
