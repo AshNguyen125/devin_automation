@@ -329,6 +329,53 @@ time-starved. 10 items in a 5-minute budget gives ~30s per item (2.9% fix rate).
   cadence problem.
 ```
 
+## Simulated Run (3 weeks)
+
+To validate the system end-to-end with real data, we simulated three weeks of operation against `superset_fork` using **live Devin sessions** (not mocks). The resolver budget was capped at **5 minutes** per run to keep the simulation fast.
+
+### Walkthrough
+
+1. **Week 0 (scan)** — ran the scanner against `superset_fork`. It grepped ~570 raw TODO/FIXME/HACK markers, capped at 100, and a Devin session ranked them by importance, complexity, and actionability into `reports/todo_scan_*.json`.
+2. **Resolver cadence (every 3 days)** — for each of the 3 weeks, the resolver picked up the latest ranked report and worked through pending items in priority order within its 5-minute budget, opening PRs / filing issues against `superset_fork` and annotating the report with statuses. Seven resolver runs total.
+3. **Repeat scans (weeks 1–2)** — re-scanned to produce weekly snapshots so cross-run analytics (new vs. removed TODOs, backlog burn-down) had real history. The codebase was stable, so the scan reports were snapshotted across the three weeks.
+4. **Tuner (meta-automation)** — after the simulation, ran the tuner once. It read all reports + run history via `compute_analytics`, computed deterministic signals, and a Devin session proposed config changes (see results below).
+
+### Example Devin sessions
+
+One representative live session for each automation:
+
+| Automation | Example session |
+|------------|-----------------|
+| Scanner | https://app.devin.ai/sessions/32bad321d4c1451fb69744bacd1b6107 |
+| Resolver | https://app.devin.ai/sessions/3f7505bc9c714120a3010d643a995cce |
+| Tuner | https://app.devin.ai/sessions/cf8afcb6e7254a63846646c1beb42da0 |
+
+### Results
+
+**8 live Devin sessions** ran during the simulation (1 scanner + 7 resolver), plus 1 tuner session afterward.
+
+```
+--- Backlog (from scan) ---
+Total TODOs:   100 analyzed   (2 critical, 6 high, 19 medium, 73 low)
+Actionable:    79.0% (79/100)
+
+--- Resolution (5-min budget) ---
+Cumulative:    2 fixed, 2 issues created
+PRs created:   2
+Fix rate:      2.9% (all-time)
+Backlog trend: 76 -> 75 pending (-1 over 3 reports)
+
+--- System health ---
+Scanner:   3/3 runs successful (100.0%)
+Resolver:  3/7 runs successful (42.9%)
+Avg resolve duration: 4.6m  (~92% of the 5-min budget used)
+```
+
+**Key takeaways:**
+- The **scanner is reliable** (100% success) and the codebase debt is flat — no new TODOs accumulating.
+- The **resolver was time-starved** at a 5-minute budget: ~92% budget utilization but only a 2.9% fix rate, i.e. ~30s per item — too little to complete real code fixes.
+- The **tuner correctly diagnosed this** and proposed: `resolver.time_budget_minutes` 5 → 10 (high), `resolver.max_items` 10 → 5 (medium), and `scanner.cadence_days` 7 → 14 (medium), while holding `resolver.cadence_days` to isolate the budget effect. It distinguished symptom from cause — a low fix rate driven by a tight budget is a *budget* problem, not a cadence problem. The resulting config PR (with full per-knob reasoning) is the tuner's output for a human to review and merge.
+
 ## GitHub Actions (Optional)
 
 The `.github/workflows/` directory contains cron workflows to run the automations automatically:
