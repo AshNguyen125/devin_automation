@@ -1,0 +1,80 @@
+flowchart TB
+    %% ============ Scanner pipeline ============
+    subgraph SCANCOL["1️⃣ Scanner — finds & ranks tech debt (weekly)"]
+        direction TB
+        S_CRON["scan_todos.yml<br/>daily cron + manual"]
+        S_GATE{{"gate.py<br/>due? (scanner.cadence_days)"}}
+        S_ORCH["scanner.py<br/>grep TODO/FIXME/HACK<br/>in superset_fork"]
+        S_DEVIN["☁️ Devin session<br/>judge importance &amp; complexity<br/>→ structured ranked report"]
+        S_CRON --> S_GATE -->|due| S_ORCH -->|create session| S_DEVIN
+        S_GATE -.->|not due| S_SKIP["skip"]
+    end
+
+    %% ============ Resolver pipeline ============
+    subgraph RESCOL["2️⃣ Resolver — fixes/triages within a budget (every 3d)"]
+        direction TB
+        R_CRON["resolve_todos.yml<br/>daily cron + manual"]
+        R_GATE{{"gate.py<br/>due? (resolver.cadence_days)"}}
+        R_ORCH["resolver.py<br/>pick top pending items<br/>time-budgeted run"]
+        R_DEVIN["☁️ Devin session<br/>read code → fix or file issue<br/>(wrap-up msg before deadline)"]
+        R_CRON --> R_GATE -->|due| R_ORCH -->|create session| R_DEVIN
+        R_GATE -.->|not due| R_SKIP["skip"]
+    end
+
+    %% ============ Tuner pipeline (meta) ============
+    subgraph TUNECOL["3️⃣ Tuner — meta-automation, tunes the others (monthly)"]
+        direction TB
+        T_CRON["tune_config.yml<br/>weekly cron + manual"]
+        T_GATE{{"gate.py<br/>due? (tuner.cadence_days)"}}
+        T_ORCH["tuner.py<br/>analytics.compute_analytics()<br/>+ deterministic signals"]
+        T_DEVIN["☁️ Devin session<br/>diagnose WHY → propose knobs<br/>{knob,old,new,rationale,confidence}"]
+        T_GUARD["guardrails (code)<br/>ladder-snap • step-clamp<br/>cooldown • confidence floor"]
+        T_CRON --> T_GATE -->|due| T_ORCH -->|create session| T_DEVIN
+        T_DEVIN -->|proposed decisions| T_GUARD
+        T_GATE -.->|not due| T_SKIP["skip"]
+    end
+
+    %% ============ Shared API ============
+    CLIENT["devin_client.py — Devin v3 API wrapper (create / poll / time-budget)"]
+    S_ORCH -. via .-> CLIENT
+    R_ORCH -. via .-> CLIENT
+    T_ORCH -. via .-> CLIENT
+
+    %% ============ State & outputs ============
+    REPORTS[("reports/ — ranked TODO reports<br/>+ run_history (JSON + Markdown)")]
+    CFG[("config.yaml — single source of truth<br/>cadence • budget • max_items • ladders")]
+    SUPER[("superset_fork — PRs (fixes) + issues (triage)")]
+    TLOG[("reports/tuning_log .md + .json<br/>decision log + cooldown state")]
+    CFGPR["config.yaml PR<br/>(proposed changes + reasoning)"]
+
+    %% scanner outputs
+    S_DEVIN -->|ranked report| REPORTS
+    %% resolver i/o
+    REPORTS -->|latest report| R_ORCH
+    R_DEVIN -->|PRs + issues| SUPER
+    R_DEVIN -->|status updates| REPORTS
+    %% tuner outputs
+    REPORTS -->|metrics| T_ORCH
+    T_GUARD -->|applied changes| TLOG
+    T_GUARD -->|edit values| CFGPR
+
+    %% ============ Feedback loop (human in the loop) ============
+    CFGPR -->|engineer reviews &amp; merges| CFG
+    CFG -->|drives cadence/budget| S_GATE
+    CFG -->|drives cadence/budget| R_ORCH
+    CFG -->|drives cadence| T_GATE
+
+    %% ============ Styling ============
+    classDef cron fill:#fef3c7,stroke:#d97706,color:#7c2d12;
+    classDef gate fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
+    classDef orch fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+    classDef devin fill:#ede9fe,stroke:#7c3aed,color:#4c1d95;
+    classDef store fill:#dcfce7,stroke:#16a34a,color:#14532d;
+    classDef out fill:#ffe4e6,stroke:#e11d48,color:#881337;
+
+    class S_CRON,R_CRON,T_CRON cron;
+    class S_GATE,R_GATE,T_GATE gate;
+    class S_ORCH,R_ORCH,T_ORCH,T_GUARD,CLIENT orch;
+    class S_DEVIN,R_DEVIN,T_DEVIN devin;
+    class REPORTS,CFG,TLOG store;
+    class SUPER,CFGPR,CFGPR out;
