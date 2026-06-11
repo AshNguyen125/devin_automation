@@ -1,9 +1,9 @@
-name: "TODO Scanner (Weekly)"
+name: "TODO Scanner"
 
 on:
   schedule:
-    - cron: "0 9 * * 1"  # Every Monday at 9:00 UTC
-  workflow_dispatch: {}   # Manual trigger
+    - cron: "0 9 * * *"  # Daily at 9:00 UTC; actual cadence is gated by config.yaml
+  workflow_dispatch: {}   # Manual trigger (bypasses the cadence gate)
 
 jobs:
   scan:
@@ -11,13 +11,6 @@ jobs:
     steps:
       - name: Checkout devin_automation
         uses: actions/checkout@v4
-
-      - name: Checkout superset_fork
-        uses: actions/checkout@v4
-        with:
-          repository: AshNguyen125/superset_fork
-          ref: d3-localization
-          path: superset_fork
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,12 +20,33 @@ jobs:
       - name: Install dependencies
         run: pip install -e .
 
+      - name: Cadence gate
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          elif python -m src.gate scanner; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "due=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout superset_fork
+        if: steps.gate.outputs.due == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: AshNguyen125/superset_fork
+          ref: d3-localization
+          path: superset_fork
+
       - name: Run scanner
+        if: steps.gate.outputs.due == 'true'
         env:
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
         run: python -m src.scanner --repo-path ./superset_fork
 
       - name: Commit report
+        if: steps.gate.outputs.due == 'true'
         run: |
           git config user.name "devin-automation[bot]"
           git config user.email "devin-automation@users.noreply.github.com"

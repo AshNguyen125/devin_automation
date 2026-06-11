@@ -23,14 +23,39 @@ scanner:
   context_lines: 5
   # Max TODOs to send to the Devin session for ranking
   max_todos: 100
+  # How often the scanner runs, in days (tunable by the meta-automation)
+  cadence_days: 7
 
 resolver:
   # Wall-clock time budget in minutes for the resolver session
-  time_budget_minutes: 30
+  time_budget_minutes: 5
   # Minutes before deadline to send "wrap up" message
-  wrap_up_buffer_minutes: 5
+  wrap_up_buffer_minutes: 1
   # Max TODO items to attempt per run (safety cap)
   max_items: 10
+  # How often the resolver runs, in days (tunable by the meta-automation)
+  cadence_days: 3
+
+# Meta-automation that periodically reviews metrics and proposes config changes.
+tuner:
+  # How often the tuner runs, in days
+  cadence_days: 30
+  # Minimum number of scanner/resolver runs required before the tuner will act
+  min_scanner_runs: 3
+  min_resolver_runs: 3
+  # Don't change the same knob again within this many days (anti-oscillation)
+  cooldown_days: 30
+  # Max steps a knob can move along its ladder in a single tuning run
+  max_steps_per_change: 1
+  # Only apply changes at or above this confidence ("low" applies all)
+  min_confidence: medium
+  # Legal value ladders for each tunable knob. Proposed values are snapped to
+  # the nearest rung and clamped to max_steps_per_change from the current value.
+  ladders:
+    scanner.cadence_days: [7, 14, 21, 30]
+    resolver.cadence_days: [1, 2, 3, 5, 7]
+    resolver.time_budget_minutes: [5, 10, 15, 20, 30, 45, 60]
+    resolver.max_items: [3, 5, 10, 15, 20]
 
 reports:
   # Directory for reports (relative to this repo root)

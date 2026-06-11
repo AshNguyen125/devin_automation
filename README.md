@@ -4,7 +4,7 @@ Automated TODO/FIXME/HACK triage and resolution for [superset_fork](https://gith
 
 ## How It Works
 
-This project runs two complementary automations:
+This project runs three complementary automations:
 
 ### Automation 1: Scanner (weekly)
 
@@ -25,6 +25,16 @@ Reads the latest ranked report and creates a **Devin session** that works throug
 ```
 Read report → filter pending items → Devin session fixes/triages → update report with results
 ```
+
+### Automation 3: Tuner (monthly, meta-automation)
+
+The **meta-automation** closes the loop: it periodically reviews the analytics and decides whether the scanner/resolver are running too often, too rarely, or with the wrong budget. It computes deterministic candidate signals, then creates a **Devin session** that judges *why* the metrics look the way they do and proposes config changes — constrained to a legal value "ladder" and clamped to small steps. Every run appends a human-readable entry to `reports/tuning_log.md`, and when changes are warranted it opens a **`config.yaml` PR** with the reasoning so a human can review and merge (or reject).
+
+```
+Read metrics → deterministic signals → Devin session proposes {knob, old, new, rationale} → guardrails → decision log + config PR
+```
+
+The tuner adjusts: `scanner.cadence_days`, `resolver.cadence_days`, `resolver.time_budget_minutes`, `resolver.max_items`. It will not act until there is enough data (`min_scanner_runs` / `min_resolver_runs`), never moves a knob more than `max_steps_per_change` rungs at once, and respects a per-knob `cooldown_days` to prevent oscillation.
 
 ## Quick Start
 
@@ -160,9 +170,38 @@ scanner:
   max_todos: 100      # Max items per scan session
 
 resolver:
-  time_budget_minutes: 30   # Wall-clock time limit
-  wrap_up_buffer_minutes: 5 # Warning before deadline
-  max_items: 10             # Max items per resolver run
+  time_budget_minutes: 5    # Wall-clock time limit (tunable)
+  wrap_up_buffer_minutes: 1 # Warning before deadline
+  max_items: 10             # Max items per resolver run (tunable)
+  cadence_days: 3           # How often the resolver runs (tunable)
+
+scanner:
+  # ...
+  cadence_days: 7           # How often the scanner runs (tunable)
+
+tuner:
+  cadence_days: 30          # How often the tuner reviews metrics
+  min_scanner_runs: 3       # Min data before the tuner will act
+  min_resolver_runs: 3
+  cooldown_days: 30         # Don't re-change the same knob within this window
+  max_steps_per_change: 1   # Max rungs a knob can move per run
+  min_confidence: medium    # Apply changes at/above this confidence only
+  ladders:                  # Legal values for each tunable knob
+    scanner.cadence_days: [7, 14, 21, 30]
+    resolver.cadence_days: [1, 2, 3, 5, 7]
+    resolver.time_budget_minutes: [5, 10, 15, 20, 30, 45, 60]
+    resolver.max_items: [3, 5, 10, 15, 20]
+```
+
+### Cadence is config-driven
+
+The `cadence_days` knobs are the source of truth for run frequency. The CI workflows run on a frequent fixed cron (daily) and call a **cadence gate** (`src/gate.py`) that checks how long it's been since each automation last ran. This lets the tuner change cadence by editing `config.yaml` alone — no workflow edits needed.
+
+```bash
+# Check whether an automation is due (exit 0 = due, exit 10 = skip)
+python -m src.gate scanner
+python -m src.gate resolver
+python -m src.gate tuner
 ```
 
 ## Project Structure
@@ -179,14 +218,18 @@ devin_automation/
 │   ├── resolver.py             # Automation 2: resolve TODOs with time budget
 │   ├── report_parser.py        # Parse/update TODO reports (JSON + Markdown)
 │   ├── analytics.py            # Analytics dashboard (CLI + Markdown)
+│   ├── tuner.py                # Automation 3: meta-automation (tune cadence/budget)
+│   ├── gate.py                 # Cadence gate (decides if an automation is due)
 │   └── prompts/
 │       ├── scanner_prompt.md   # Prompt template for scanner sessions
-│       └── resolver_prompt.md  # Prompt template for resolver sessions
-├── reports/                    # Generated reports (committed for history)
+│       ├── resolver_prompt.md  # Prompt template for resolver sessions
+│       └── tuner_prompt.md     # Prompt template for tuner sessions
+├── reports/                    # Generated reports + tuning_log.md (committed for history)
 │   └── .gitkeep
 └── .github/workflows/
-    ├── scan_todos.yml          # Weekly cron for scanner
-    └── resolve_todos.yml       # Every-3-days cron for resolver
+    ├── scan_todos.yml          # Daily cron + cadence gate for scanner
+    ├── resolve_todos.yml       # Daily cron + cadence gate for resolver
+    └── tune_config.yml         # Weekly cron + cadence gate for tuner
 ```
 
 ## Analytics Dashboard
@@ -239,14 +282,59 @@ Resolver: 2/3 runs successful (66.7%)
 
 With `--output-md`, the Markdown summary is saved to `reports/analytics_summary.md` — readable directly on GitHub.
 
+## Meta-Automation: The Tuner
+
+The tuner reviews the analytics and proposes cadence/budget changes. Run it manually:
+
+```bash
+# Preview decisions without editing config or opening a PR (still runs a real Devin session)
+python -m src.tuner --dry-run
+
+# Apply changes to config.yaml and append to the decision log, but don't open a PR
+python -m src.tuner --no-pr
+
+# Full run: propose changes, log them, and open a config.yaml PR for human review
+python -m src.tuner
+```
+
+**How it decides:** the orchestrator pre-computes deterministic signals (avg new TODOs per scan, backlog direction, resolver budget utilization, fix rate, etc.) and hands them to a Devin session along with the current config and the legal ladders. The session returns one structured decision per knob (`{knob, current_value, proposed_value, action, confidence, rationale}`). Code-side **guardrails** then:
+
+- reject any knob that isn't tunable or any value off its ladder (snapping to the nearest rung),
+- clamp every change to at most `max_steps_per_change` rungs,
+- reject changes below the `min_confidence` floor,
+- reject changes to knobs still in `cooldown_days`,
+- require a minimum data window before acting at all.
+
+Every run writes a decision-log entry — even "no change" — to `reports/tuning_log.md` (human-readable) and `reports/tuning_log.json` (machine-readable, used for cooldown tracking). When changes survive the guardrails, the tuner opens a `config.yaml` PR whose body contains the full reasoning, so a human decides whether to apply by merging.
+
+Example decision-log entry:
+```markdown
+## 2026-06-11 — Tuning Run
+
+**Assessment**: The system is healthy on the scanning side but the resolver is severely
+time-starved. 10 items in a 5-minute budget gives ~30s per item (2.9% fix rate)...
+
+**Applied changes:**
+- `resolver.time_budget_minutes`: 5 → **10** (confidence: high)
+  - The resolver consistently uses 90-100% of its 5-minute budget while achieving only a
+    2.9% fix rate... stepping up one rung should let fixes actually complete.
+- `scanner.cadence_days`: 7 → **14** (confidence: medium)
+  - Raw TODO count flat at 100 across all 3 scans; the codebase isn't accumulating debt.
+
+**Held steady:**
+- `resolver.cadence_days` stays at 3 — the poor fix rate is a time-per-item problem, not a
+  cadence problem.
+```
+
 ## GitHub Actions (Optional)
 
 The `.github/workflows/` directory contains cron workflows to run the automations automatically:
 
-- **`scan_todos.yml`**: Runs the scanner every Monday at 9:00 UTC
-- **`resolve_todos.yml`**: Runs the resolver every 3 days at 9:00 UTC
+- **`scan_todos.yml`**: Runs daily at 9:00 UTC; the cadence gate enforces `scanner.cadence_days`
+- **`resolve_todos.yml`**: Runs daily at 9:00 UTC; the cadence gate enforces `resolver.cadence_days`
+- **`tune_config.yml`**: Runs weekly (Mondays); the cadence gate enforces `tuner.cadence_days`
 
-To use these, add `DEVIN_API_KEY` as a repository secret in the `devin_automation` repo settings.
+Each workflow runs on a frequent cron and uses `src/gate.py` to decide whether enough time has passed since the last run. `workflow_dispatch` (manual trigger) bypasses the gate. To use these, add `DEVIN_API_KEY` as a repository secret in the `devin_automation` repo settings. The tuner workflow also needs `contents: write` and `pull-requests: write` permissions (already set) so it can open config PRs.
 
 ## How Devin Sessions Work
 
@@ -266,4 +354,6 @@ The orchestrator (scanner.py / resolver.py) handles session creation, polling, t
 - **Why two automations?** Scanning is cheap (~5 min) and should run frequently. Fixing is expensive (~30 min) and should be controlled. Separating them lets you review the scan results before any code changes happen.
 - **Why a time budget?** Prevents runaway costs. The resolver stops after 30 minutes regardless of how many items remain — they'll be picked up in the next run.
 - **Why structured output?** The Devin API supports JSON Schema validation on session output. This ensures the scanner returns a well-typed report that the resolver can parse reliably.
+- **Why guardrails on the tuner instead of trusting the LLM?** Deciding cadence from numbers is partly a deterministic problem, so the orchestrator constrains the session to a legal ladder, clamps step size, and enforces cooldowns. The LLM adds value where it's unique — weighing many signals at once, distinguishing symptom from cause (e.g. a low fix rate caused by a tight budget is a *budget* problem, not a cadence problem), and writing the human-readable rationale — while the code prevents runaway or oscillating changes.
+- **Why does the tuner open a PR instead of editing config directly?** A config change alters how the whole system behaves, so it should get a human glance. The PR reuses the review/merge gate you already trust and never changes behavior silently.
 - **Why local grep first?** Finding TODO markers is mechanical work that doesn't need an LLM. The local grep pre-filters the list so the Devin session can focus on *analysis* — reading context, judging importance, understanding code intent.
