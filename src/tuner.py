@@ -539,6 +539,7 @@ def open_config_pr(
     applied: list[AppliedChange],
     overall_assessment: str,
     session_url: str,
+    pr_base: str | None = None,
 ) -> str | None:
     """Create a branch, commit config + log changes, and open a PR. Returns PR URL or None."""
     branch = f"tuner/{int(time.time())}-config-update"
@@ -583,20 +584,18 @@ def open_config_pr(
             capture_output=True,
         )
         subprocess.run(["git", "push", "-u", "origin", branch], check=True, capture_output=True)
-        result = subprocess.run(
-            [
-                "gh",
-                "pr",
-                "create",
-                "--title",
-                f"chore(tuner): tune config ({summary_line})",
-                "--body",
-                body,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        gh_cmd = [
+            "gh",
+            "pr",
+            "create",
+            "--title",
+            f"chore(tuner): tune config ({summary_line})",
+            "--body",
+            body,
+        ]
+        if pr_base:
+            gh_cmd += ["--base", pr_base]
+        result = subprocess.run(gh_cmd, check=True, capture_output=True, text=True)
         pr_url = result.stdout.strip()
         logger.info("Opened config PR: %s", pr_url)
         return pr_url
@@ -617,6 +616,7 @@ def run_tuner(
     api_key: str,
     dry_run: bool = False,
     create_pr: bool = True,
+    pr_base: str | None = None,
 ) -> None:
     tuner_cfg = config["tuner"]
     output_dir = Path(config["reports"]["output_dir"])
@@ -722,7 +722,7 @@ def run_tuner(
 
     # 8. Open PR
     if applied and not dry_run and create_pr:
-        pr_url = open_config_pr(config_path, applied, overall, session.url)
+        pr_url = open_config_pr(config_path, applied, overall, session.url, pr_base=pr_base)
         if pr_url:
             print(f"\nConfig PR opened: {pr_url}")
     elif applied and dry_run:
@@ -750,6 +750,11 @@ def main() -> None:
         help="Apply config changes and log, but don't open a PR",
     )
     parser.add_argument("--api-key", default=None, help="Devin API key (default: $DEVIN_API_KEY)")
+    parser.add_argument(
+        "--pr-base",
+        default=None,
+        help="Base branch for the config PR (default: repo default branch)",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -770,6 +775,7 @@ def main() -> None:
         api_key,
         dry_run=args.dry_run,
         create_pr=not args.no_pr,
+        pr_base=args.pr_base,
     )
 
 

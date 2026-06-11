@@ -295,6 +295,9 @@ python -m src.tuner --no-pr
 
 # Full run: propose changes, log them, and open a config.yaml PR for human review
 python -m src.tuner
+
+# Target a specific base branch for the config PR (default: repo default branch)
+python -m src.tuner --pr-base main
 ```
 
 **How it decides:** the orchestrator pre-computes deterministic signals (avg new TODOs per scan, backlog direction, resolver budget utilization, fix rate, etc.) and hands them to a Devin session along with the current config and the legal ladders. The session returns one structured decision per knob (`{knob, current_value, proposed_value, action, confidence, rationale}`). Code-side **guardrails** then:
