@@ -12,12 +12,22 @@ import logging
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
 
 from src.devin_client import DevinClient
-from src.report_parser import TodoItem, TodoReport, now_iso, save_report
+from src.report_parser import (
+    OUTCOME_FAILURE,
+    OUTCOME_PARTIAL,
+    OUTCOME_SUCCESS,
+    RunMetadata,
+    TodoItem,
+    TodoReport,
+    now_iso,
+    save_report,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -202,8 +212,12 @@ def build_prompt(todos: list[dict], config: dict) -> str:
 
 def run_scanner(config: dict, repo_path: Path, api_key: str) -> TodoReport:
     """Run the full scanner pipeline."""
+    started_at = now_iso()
+    start_time = time.monotonic()
+
     # 1. Collect TODOs from local checkout
     todos = collect_todos(repo_path, config)
+    raw_todos_found = len(todos)
     if not todos:
         logger.warning("No TODOs found in repo — nothing to scan")
         return TodoReport(
@@ -237,6 +251,9 @@ def run_scanner(config: dict, repo_path: Path, api_key: str) -> TodoReport:
     # 4. Poll until complete
     result = client.poll_until_done(session.session_id, timeout_seconds=1800)
 
+    finished_at = now_iso()
+    duration = time.monotonic() - start_time
+
     if result.status == "error":
         logger.error("Scanner session failed: %s", result.url)
         sys.exit(1)
@@ -244,8 +261,33 @@ def run_scanner(config: dict, repo_path: Path, api_key: str) -> TodoReport:
     # 5. Parse structured output into report
     report = _build_report_from_output(result.structured_output, config, todos)
 
+    # Determine outcome
+    if result.structured_output and report.todos:
+        outcome = OUTCOME_SUCCESS
+    elif result.structured_output:
+        outcome = OUTCOME_PARTIAL
+    else:
+        outcome = OUTCOME_FAILURE
+
+    # Build run metadata
+    meta = RunMetadata(
+        automation="scanner",
+        run_id=f"scan-{started_at}",
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_seconds=round(duration, 1),
+        devin_session_id=session.session_id,
+        devin_session_url=session.url,
+        devin_session_status=result.status,
+        devin_session_status_detail=result.status_detail or "",
+        outcome=outcome,
+        raw_todos_found=raw_todos_found,
+        todos_sent_to_devin=len(todos),
+        todos_analyzed=len(report.todos),
+    )
+    report.run_history.append(meta)
+
     # 6. Save report
-    repo_cfg = config["target_repo"]
     report_dir = config["reports"]["output_dir"]
     json_path, md_path = save_report(report, report_dir)
     print(f"\nReport saved:")
@@ -253,7 +295,7 @@ def run_scanner(config: dict, repo_path: Path, api_key: str) -> TodoReport:
     print(f"  Markdown: {md_path}")
 
     # Summary
-    importance_counts = {}
+    importance_counts: dict[str, int] = {}
     for t in report.todos:
         importance_counts[t.importance] = importance_counts.get(t.importance, 0) + 1
     print(f"\nResults: {len(report.todos)} TODOs analyzed")
@@ -261,6 +303,7 @@ def run_scanner(config: dict, repo_path: Path, api_key: str) -> TodoReport:
         count = importance_counts.get(imp, 0)
         if count:
             print(f"  {imp}: {count}")
+    print(f"Duration: {duration:.0f}s | Outcome: {outcome}")
 
     return report
 

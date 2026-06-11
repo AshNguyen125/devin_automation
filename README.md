@@ -178,6 +178,7 @@ devin_automation/
 │   ├── scanner.py              # Automation 1: scan & rank TODOs
 │   ├── resolver.py             # Automation 2: resolve TODOs with time budget
 │   ├── report_parser.py        # Parse/update TODO reports (JSON + Markdown)
+│   ├── analytics.py            # Analytics dashboard (CLI + Markdown)
 │   └── prompts/
 │       ├── scanner_prompt.md   # Prompt template for scanner sessions
 │       └── resolver_prompt.md  # Prompt template for resolver sessions
@@ -187,6 +188,56 @@ devin_automation/
     ├── scan_todos.yml          # Weekly cron for scanner
     └── resolve_todos.yml       # Every-3-days cron for resolver
 ```
+
+## Analytics Dashboard
+
+After running the scanner and/or resolver, view system effectiveness metrics:
+
+```bash
+# CLI dashboard
+python -m src.analytics
+
+# Also generate a Markdown summary file
+python -m src.analytics --output-md
+```
+
+The dashboard shows:
+
+- **Backlog**: Current TODO counts by importance, complexity, and category
+- **Changes since last scan**: New vs. removed TODOs, net change
+- **Resolution progress**: Cumulative fixes, issues created, fix rate (per-run and all-time)
+- **System health**: Success rates, average durations, throughput (items/minute)
+- **Run history**: Timeline of all scanner and resolver runs with outcomes
+
+Example CLI output:
+```
+==================================================
+  TODO Automation Dashboard
+==================================================
+
+Last scan:    2026-06-11  (success, 9.0m)
+Last resolve: 2026-06-12  (success, 28.0m, 93.3% budget used)
+
+--- Backlog ---
+Total TODOs:    570 raw -> 100 analyzed (-13)
+  Critical        2  (-1)
+  High            6  (no change)
+  Medium         25  (+3)
+  Low            67  (-2)
+  Actionable:   82.0% (82/100)
+
+--- Resolution Progress ---
+Cumulative:    12 fixed, 5 issues created, 3 skipped
+PRs created:   12
+Fix rate:      60.0% (last run) | 57.1% (all-time)
+Backlog trend: 100 -> 88 pending (-12 over 3 report(s))
+
+--- System Health ---
+Scanner:  3/3 runs successful (100.0%)
+Resolver: 2/3 runs successful (66.7%)
+```
+
+With `--output-md`, the Markdown summary is saved to `reports/analytics_summary.md` — readable directly on GitHub.
 
 ## GitHub Actions (Optional)
 

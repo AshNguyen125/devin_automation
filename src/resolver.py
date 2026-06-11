@@ -13,19 +13,25 @@ import argparse
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import yaml
 
 from src.devin_client import DevinClient
 from src.report_parser import (
+    OUTCOME_FAILURE,
+    OUTCOME_PARTIAL,
+    OUTCOME_SUCCESS,
     STATUS_DONE,
     STATUS_ISSUE_CREATED,
     STATUS_SKIPPED,
+    RunMetadata,
     TodoReport,
     get_pending_todos,
     load_latest_report,
     load_report,
+    now_iso,
     update_report,
 )
 
@@ -92,7 +98,10 @@ def build_resolver_prompt(pending_todos: list, config: dict) -> str:
 
 def run_resolver(config: dict, report: TodoReport, api_key: str) -> None:
     """Run the resolver pipeline."""
+    started_at = now_iso()
+    start_time = time.monotonic()
     resolver_cfg = config["resolver"]
+    budget_minutes = resolver_cfg["time_budget_minutes"]
 
     # 1. Get pending items
     pending = get_pending_todos(report)
@@ -129,20 +138,68 @@ def run_resolver(config: dict, report: TodoReport, api_key: str) -> None:
     logger.info("Created resolver session: %s", session.url)
     print(f"Resolver session created: {session.url}")
     print(
-        f"Time budget: {resolver_cfg['time_budget_minutes']} minutes "
-        f"(wrap-up at {resolver_cfg['time_budget_minutes'] - resolver_cfg['wrap_up_buffer_minutes']} min)\n"
+        f"Time budget: {budget_minutes} minutes "
+        f"(wrap-up at {budget_minutes - resolver_cfg['wrap_up_buffer_minutes']} min)\n"
     )
     print("Waiting for Devin to resolve TODOs...\n")
 
     # 4. Poll with time budget
     result = client.poll_with_budget(
         session.session_id,
-        budget_minutes=resolver_cfg["time_budget_minutes"],
+        budget_minutes=budget_minutes,
         wrap_up_buffer_minutes=resolver_cfg["wrap_up_buffer_minutes"],
     )
 
+    finished_at = now_iso()
+    duration = time.monotonic() - start_time
+    budget_used = min(duration / 60, budget_minutes)
+
     # 5. Update report with results
     _apply_results_to_report(report, result.structured_output)
+
+    # Count resolution outcomes
+    resolved_items = (result.structured_output or {}).get("resolved_items", [])
+    items_fixed = sum(1 for r in resolved_items if r["action"] == "fixed")
+    items_issue = sum(1 for r in resolved_items if r["action"] == "issue_created")
+    items_skipped = sum(1 for r in resolved_items if r["action"] == "skipped")
+    items_not_reached = sum(1 for r in resolved_items if r["action"] == "not_reached")
+    prs_created = len(result.pull_requests)
+    issues_created = items_issue
+
+    # Determine outcome
+    if result.status == "error":
+        outcome = OUTCOME_FAILURE
+    elif resolved_items:
+        outcome = OUTCOME_SUCCESS if items_fixed > 0 or items_issue > 0 else OUTCOME_PARTIAL
+    elif result.structured_output:
+        outcome = OUTCOME_PARTIAL
+    else:
+        outcome = OUTCOME_FAILURE
+
+    # Build run metadata
+    meta = RunMetadata(
+        automation="resolver",
+        run_id=f"resolve-{started_at}",
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_seconds=round(duration, 1),
+        devin_session_id=session.session_id,
+        devin_session_url=session.url,
+        devin_session_status=result.status,
+        devin_session_status_detail=result.status_detail or "",
+        outcome=outcome,
+        budget_minutes=budget_minutes,
+        budget_used_minutes=round(budget_used, 1),
+        budget_utilization_pct=round((budget_used / budget_minutes) * 100, 1) if budget_minutes else 0,
+        items_attempted=len(pending),
+        items_fixed=items_fixed,
+        items_issue_created=items_issue,
+        items_skipped=items_skipped,
+        items_not_reached=items_not_reached,
+        prs_created=prs_created,
+        issues_created=issues_created,
+    )
+    report.run_history.append(meta)
 
     # 6. Save updated report
     report_dir = config["reports"]["output_dir"]
@@ -155,8 +212,7 @@ def run_resolver(config: dict, report: TodoReport, api_key: str) -> None:
     if result.structured_output:
         summary = result.structured_output.get("summary", "No summary")
         print(f"\nSession summary: {summary}")
-        resolved = result.structured_output.get("resolved_items", [])
-        for item in resolved:
+        for item in resolved_items:
             action_icon = {
                 "fixed": "PR",
                 "issue_created": "ISSUE",
@@ -174,7 +230,9 @@ def run_resolver(config: dict, report: TodoReport, api_key: str) -> None:
         for pr in result.pull_requests:
             print(f"  {pr['pr_url']} ({pr.get('pr_state', 'open')})")
 
-    print(f"\nSession: {result.url}")
+    print(f"\nDuration: {duration:.0f}s | Budget used: {budget_used:.1f}/{budget_minutes}min ({meta.budget_utilization_pct}%)")
+    print(f"Outcome: {outcome} | Fixed: {items_fixed} | Issues: {items_issue} | Skipped: {items_skipped}")
+    print(f"Session: {result.url}")
 
 
 def _apply_results_to_report(report: TodoReport, structured_output: dict | None) -> None:

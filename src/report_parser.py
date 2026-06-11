@@ -40,6 +40,44 @@ class TodoItem:
     issue_url: str = ""
 
 
+# Outcome values for run metadata
+OUTCOME_SUCCESS = "success"
+OUTCOME_PARTIAL = "partial"
+OUTCOME_FAILURE = "failure"
+
+
+@dataclass
+class RunMetadata:
+    """Metadata captured for each scanner or resolver run."""
+
+    automation: str  # "scanner" or "resolver"
+    run_id: str
+    started_at: str
+    finished_at: str
+    duration_seconds: float
+    devin_session_id: str
+    devin_session_url: str
+    devin_session_status: str
+    devin_session_status_detail: str
+    outcome: str  # success, partial, failure
+    error_message: str = ""
+    # Scanner-specific
+    raw_todos_found: int = 0
+    todos_sent_to_devin: int = 0
+    todos_analyzed: int = 0
+    # Resolver-specific
+    budget_minutes: float = 0
+    budget_used_minutes: float = 0
+    budget_utilization_pct: float = 0
+    items_attempted: int = 0
+    items_fixed: int = 0
+    items_issue_created: int = 0
+    items_skipped: int = 0
+    items_not_reached: int = 0
+    prs_created: int = 0
+    issues_created: int = 0
+
+
 @dataclass
 class TodoReport:
     scan_date: str
@@ -47,6 +85,7 @@ class TodoReport:
     branch: str
     summary: str
     todos: list[TodoItem] = field(default_factory=list)
+    run_history: list[RunMetadata] = field(default_factory=list)
 
 
 def save_report(report: TodoReport, output_dir: str | Path) -> tuple[Path, Path]:
@@ -83,7 +122,8 @@ def load_report(path: Path) -> TodoReport:
     """Load a report from a JSON file."""
     data = json.loads(path.read_text())
     todos = [TodoItem(**t) for t in data.pop("todos", [])]
-    return TodoReport(**data, todos=todos)
+    run_history = [RunMetadata(**r) for r in data.pop("run_history", [])]
+    return TodoReport(**data, todos=todos, run_history=run_history)
 
 
 def update_report(report: TodoReport, output_dir: str | Path) -> tuple[Path, Path]:
