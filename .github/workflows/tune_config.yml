@@ -1,12 +1,21 @@
-name: "TODO Resolver"
+name: "Config Tuner (Meta-Automation)"
 
 on:
   schedule:
-    - cron: "0 9 * * *"  # Daily at 9:00 UTC; actual cadence is gated by config.yaml
-  workflow_dispatch: {}     # Manual trigger (bypasses the cadence gate)
+    - cron: "0 10 * * 1"  # Weekly check at 10:00 UTC Monday; actual cadence gated by config.yaml
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute and log decisions but don't edit config or open a PR"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
-  resolve:
+  tune:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout devin_automation
@@ -25,23 +34,22 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "due=true" >> "$GITHUB_OUTPUT"
-          elif python -m src.gate resolver; then
+          elif python -m src.gate tuner; then
             echo "due=true" >> "$GITHUB_OUTPUT"
           else
             echo "due=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run resolver
+      - name: Run tuner
         if: steps.gate.outputs.due == 'true'
         env:
           DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
-        run: python -m src.resolver
-
-      - name: Commit updated report
-        if: steps.gate.outputs.due == 'true'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "devin-automation[bot]"
           git config user.email "devin-automation@users.noreply.github.com"
-          git add reports/
-          git diff --cached --quiet || git commit -m "chore: update TODO report with resolver results $(date +%Y-%m-%d)"
-          git push
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python -m src.tuner --dry-run
+          else
+            python -m src.tuner
+          fi
