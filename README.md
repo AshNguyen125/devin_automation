@@ -2,6 +2,18 @@
 
 Automated TODO/FIXME/HACK triage and resolution for [superset_fork](https://github.com/AshNguyen125/superset_fork) using the [Devin API](https://docs.devin.ai/api-reference/overview).
 
+## Architecture
+
+![Architecture diagram](docs/architecture.png)
+
+Three automations, each a thin Python orchestrator that gathers context and delegates the hard, judgment-heavy work to a **Devin session**:
+
+1. **Scanner** greps the codebase for markers and a Devin session ranks them into a report.
+2. **Resolver** reads the latest report and a Devin session fixes items (PRs) or files issues, within a time budget.
+3. **Tuner** (meta-automation) reads the accumulated metrics and a Devin session proposes config changes; code-side guardrails constrain them and a `config.yaml` PR is opened for a human to merge.
+
+All three are gated by `gate.py` against `config.yaml` (the single source of truth for cadence/budget), so the tuner can re-tune the whole system just by editing config. The diagram source lives at [`docs/architecture.mmd`](docs/architecture.mmd) (Mermaid) and is rendered to [`docs/architecture.png`](docs/architecture.png).
+
 ## How It Works
 
 This project runs three complementary automations:
