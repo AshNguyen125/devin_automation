@@ -12,7 +12,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"exit", "error"}
-FINISHED_DETAILS = {"finished"}
+FINISHED_DETAILS = {"finished", "waiting_for_user"}
 
 
 @dataclass
