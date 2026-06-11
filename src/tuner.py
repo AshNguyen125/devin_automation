@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -107,15 +108,6 @@ def get_knob(config: dict[str, Any], knob: str) -> Any:
     for part in knob.split("."):
         node = node[part]
     return node
-
-
-def set_knob(config: dict[str, Any], knob: str, value: Any) -> None:
-    """Set a dotted knob path in-place."""
-    parts = knob.split(".")
-    node = config
-    for part in parts[:-1]:
-        node = node[part]
-    node[parts[-1]] = value
 
 
 # ---------------------------------------------------------------------------
@@ -700,9 +692,7 @@ def run_tuner(
 
     # 6. Apply to config file (unless dry-run)
     if applied and not dry_run:
-        for c in applied:
-            set_knob(config, c.knob, c.new_value)
-        _write_config_preserving(config_path, config)
+        apply_changes_to_config_file(config_path, applied)
         print(f"Updated {config_path}")
 
     # 7. Append decision log (skipped in dry-run so cooldown state isn't polluted)
@@ -731,9 +721,35 @@ def run_tuner(
         print("\nNo changes applied; no PR needed.")
 
 
-def _write_config_preserving(config_path: Path, config: dict[str, Any]) -> None:
-    """Write config back to YAML. Uses a round-trip dump (comments are not preserved)."""
-    config_path.write_text(yaml.safe_dump(config, sort_keys=False, default_flow_style=False))
+def apply_changes_to_config_file(config_path: Path, applied: list[AppliedChange]) -> None:
+    """Apply knob changes with a surgical, line-level edit that preserves comments.
+
+    Each tunable knob is `section.key` at the first indent level under a top-level
+    section, so we walk the file, track the current section, and rewrite only the
+    matching `key: value` line (keeping its indentation and any inline comment).
+    """
+    lines = config_path.read_text().splitlines(keepends=True)
+
+    for change in applied:
+        section, key = change.knob.split(".", 1)
+        in_section = False
+        for i, raw in enumerate(lines):
+            line = raw.rstrip("\n")
+            # Top-level section header (no leading whitespace)
+            if re.match(rf"^{re.escape(section)}:\s*$", line):
+                in_section = True
+                continue
+            if in_section:
+                # A new top-level key ends the current section
+                if line and not line[0].isspace() and not line.startswith("#"):
+                    in_section = False
+                    continue
+                m = re.match(rf"^(\s+{re.escape(key)}:\s*)(\S+)(.*)$", line)
+                if m:
+                    lines[i] = f"{m.group(1)}{change.new_value}{m.group(3)}\n"
+                    break
+
+    config_path.write_text("".join(lines))
 
 
 def main() -> None:
