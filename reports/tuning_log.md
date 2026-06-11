@@ -1,0 +1,23 @@
+# Tuning Decision Log
+
+Chronological log of cadence/budget tuning decisions made by the meta-automation (`src/tuner.py`). Newest entries at the bottom.
+
+## 2026-06-11 — Tuning Run
+
+**Devin session**: https://app.devin.ai/sessions/cf8afcb6e7254a63846646c1beb42da0
+
+**Assessment**: The scanner side is healthy and stable — 100% success rate with a flat codebase — so it can safely be slowed to biweekly to save cost. The resolver is severely time-starved: 91.7% average budget utilization with only 2.9% fix rate across 7 runs. The root cause is ~30 seconds per item, which is insufficient for code fixes. The recommended intervention is to double the budget (5→10 min) and halve the items per run (10→5), giving each item ~2 minutes instead of ~30 seconds. Resolver cadence is held steady at 3 days so we can measure the impact of the budget/items changes before making further adjustments. These changes are synergistic — both target the same bottleneck (time per item) without conflicting.
+
+**Applied changes:**
+
+- `scanner.cadence_days`: 7 → **14** (confidence: medium)
+  - Raw TODO count has been flat at 100 across all 3 weekly scans (avg delta = 0.0), and the pending backlog has barely moved (76→76→75). The codebase is stable with no new TODOs being introduced. Slowing the scanner to every 14 days saves cost without losing meaningful signal. Three consecutive identical scans is sufficient evidence of stability, though medium confidence since we only have 3 data points.
+- `resolver.time_budget_minutes`: 5 → **10** (confidence: high)
+  - This is the clearest signal in the data. Average budget utilization is 91.7% across all 7 runs, with one run hitting 100%. Despite consuming nearly all available time, the resolver achieves only a 2.9% fix rate — it is being cut off before it can complete work on items. With 10 items attempted per run in 5 minutes, each item gets only ~30 seconds, which is insufficient for meaningful code fixes. Stepping up to 10 minutes doubles time-per-item to ~1 minute (or ~2 minutes if max_items is also reduced), which should materially improve completion rates. The consistently high utilization across 7 runs makes this a high-confidence recommendation.
+- `resolver.max_items`: 10 → **5** (confidence: medium)
+  - The resolver attempts 10 items every run but fixes almost none (2 out of 70 total attempts = 2.9%). It is spreading itself too thin. Even with the proposed budget increase to 10 minutes, 10 items yields only ~1 minute per item. Reducing to 5 items combined with the budget increase gives ~2 minutes per item — a 4x improvement over the current ~30 seconds. Fewer, deeper attempts should convert more items to actual fixes. Medium confidence because we're making two complementary changes simultaneously, which makes it harder to isolate effects in the next review cycle, but both changes address the same root cause (insufficient time per item) and are synergistic rather than conflicting.
+
+**Held steady:**
+
+- `resolver.cadence_days` stays at 3 — The resolver's low fix rate (2.9%) and high failure/partial rate (57.1%) are symptoms of a tight time budget, not of running too frequently. With only ~30 seconds per item, the resolver can't complete fixes regardless of how often it runs. The correct intervention is to fix the budget constraint first; slowing cadence would only delay backlog reduction further. Once the budget increase takes effect, we can reassess cadence based on improved fix-rate data.
+
