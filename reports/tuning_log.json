@@ -1,0 +1,39 @@
+[
+  {
+    "timestamp": "2026-06-12T00:45:21.543891+00:00",
+    "session_url": "https://app.devin.ai/sessions/41299c979be543c883fbdc3b1b538515",
+    "overall_assessment": "The scanner is healthy and over-polling a stable codebase \u2014 slow it down to save cost. The resolver is severely time-starved: 91.7% average budget utilization with only a 2.9% fix rate and 57% failure/partial rate clearly indicates items are being cut off before completion. The fix is two-pronged: increase the time budget from 5 to 10 minutes AND reduce max_items from 10 to 5, giving each item ~2 minutes instead of ~30 seconds. This should significantly improve fix rate and success rate. Hold resolver cadence steady at 3 days to preserve throughput and allow clean measurement of whether the budget/items changes are effective.",
+    "applied_changes": [
+      {
+        "knob": "scanner.cadence_days",
+        "old_value": 7,
+        "new_value": 14,
+        "confidence": "medium",
+        "rationale": "Raw TODO count is completely flat at 100 across all 3 scans (avg delta = 0.0) and the backlog has barely moved (76 \u2192 75). The codebase is stable with no new TODOs being introduced. Scanning every 7 days is wasteful; moving to 14 days halves the cost while still catching any future uptick within two weeks."
+      },
+      {
+        "knob": "resolver.time_budget_minutes",
+        "old_value": 5,
+        "new_value": 10,
+        "confidence": "high",
+        "rationale": "This is the primary bottleneck. The resolver averages 91.7% budget utilization across all 7 runs (4.6 min of 5 min), hit 100% ceiling on one run, and achieved only a 2.9% fix rate. With 10 items attempted per run, each item gets roughly 30 seconds \u2014 far too little for meaningful code fixes involving context understanding and testing. Stepping the budget up one rung to 10 minutes doubles available time and should materially improve the fix rate. The failure and partial outcomes (4 of 7 runs) are consistent with time starvation, not inherently unfixable items."
+      },
+      {
+        "knob": "resolver.max_items",
+        "old_value": 10,
+        "new_value": 5,
+        "confidence": "medium",
+        "rationale": "Every run attempts 10 items but fixes 0\u20131. The resolver is spreading itself too thin. Reducing to 5 items, combined with the budget increase to 10 minutes, gives ~2 minutes per item instead of ~30 seconds \u2014 a 4x improvement in time per item. This focuses effort on fewer items with a much higher chance of completion. The current pattern of attempting 10 and fixing 0 is worse than attempting 5 with a realistic chance of fixing 2\u20133."
+      }
+    ],
+    "rejected_changes": [],
+    "no_changes": [
+      {
+        "knob": "resolver.cadence_days",
+        "current_value": 3,
+        "rationale": "The resolver's low fix rate (2.9%) and high failure/partial rate (57.1%) are caused by insufficient time per item, not by running too frequently. Slowing the cadence would not address the root cause and would reduce throughput once the budget constraint is relieved. Keeping cadence at 3 days lets us observe whether the budget increase improves fix rate before making further adjustments."
+      }
+    ],
+    "skipped_reason": ""
+  }
+]
