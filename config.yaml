@@ -24,15 +24,15 @@ scanner:
   # Max TODOs to send to the Devin session for ranking
   max_todos: 100
   # How often the scanner runs, in days (tunable by the meta-automation)
-  cadence_days: 7
+  cadence_days: 14
 
 resolver:
   # Wall-clock time budget in minutes for the resolver session
-  time_budget_minutes: 5
+  time_budget_minutes: 10
   # Minutes before deadline to send "wrap up" message
   wrap_up_buffer_minutes: 1
   # Max TODO items to attempt per run (safety cap)
-  max_items: 10
+  max_items: 5
   # How often the resolver runs, in days (tunable by the meta-automation)
   cadence_days: 3
 
